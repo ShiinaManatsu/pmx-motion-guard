@@ -1,0 +1,13 @@
+schema_version = "1.0.0"
+id = "pmx_retarget_guard"
+version = "0.1.0"
+name = "PMX Retarget Guard"
+tagline = "Correct PMX self intersections and export mesh and skeletal animation"
+maintainer = "White"
+type = "add-on"
+blender_version_min = "4.2.0"
+license = ["SPDX:MIT"]
+platforms = ["windows-x64"]
+[permissions]
+files = "Store character mappings, animation caches and exported files"
+network = "Request optional DeepSeek bone mapping suggestions"

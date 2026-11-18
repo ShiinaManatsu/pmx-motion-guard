@@ -10,3 +10,5 @@ cache/
 *.dll
 *.exp
 *.lib
+release/
+!addon/native/*.dll
