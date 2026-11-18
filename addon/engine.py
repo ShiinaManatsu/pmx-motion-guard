@@ -83,6 +83,37 @@ def enabled_indices(settings):
     return indices
 
 
+def validate_surfaces(obj, weights, slots):
+    """Explain incomplete anatomical coverage before allocating result objects."""
+    from .vendor.retarget_guard.character import BODY_PART
+    names = ["躯干", "头部", "左上臂", "右上臂", "左前臂", "右前臂", "左手", "右手",
+             "左大腿", "右大腿", "左小腿", "右小腿", "左脚", "右脚"]
+    part_weights = np.zeros((len(weights), 14))
+    for joint, part in enumerate(BODY_PART):
+        part_weights[:, part] += weights[:, joint]
+    labels = part_weights.argmax(1)
+    purity = part_weights.max(1)
+    obj.data.calc_loop_triangles()
+    material_ids = []
+    for index in range(len(obj.material_slots)):
+        ids = [vertex for triangle in obj.data.loop_triangles if triangle.material_index == index
+               for vertex in triangle.vertices]
+        material_ids.append(np.unique(ids).astype(np.int64))
+    selected = np.unique(np.concatenate([material_ids[i] for i in slots])) if slots else np.array([], dtype=np.int64)
+    problems = []
+    for part, name in enumerate(names):
+        threshold = .6 if part < 2 else .9
+        usable = (labels == part) & (purity >= threshold)
+        if np.any(usable[selected]):
+            continue
+        candidates = [obj.material_slots[i].name for i, ids in enumerate(material_ids)
+                      if i not in slots and np.any(usable[ids])]
+        suggestion = "、".join(candidates[:3]) if candidates else "请检查网格覆盖和骨骼权重"
+        problems.append(name + "（" + suggestion + "）")
+    if problems:
+        raise ValueError("碰撞表面缺少 " + "；".join(problems))
+
+
 def corrected_frame(obj, mapping, body_slots, weights, settings, directory, previous=None):
     vertices, triangles, materials = sample_mesh(obj)
     if len(vertices) != len(weights):
@@ -177,6 +208,7 @@ class AnimationJob:
         self.started = time.perf_counter()
         self.weights, self.bone_groups = weights_and_groups(obj, self.mapping)
         self.slots = [i for i, item in enumerate(settings.materials) if item.enabled]
+        validate_surfaces(obj, self.weights, self.slots)
         self.output_dir = Path(directory) / "animations" / uuid.uuid4().hex
         self.output_dir.mkdir(parents=True)
         self.scene.frame_set(start)
