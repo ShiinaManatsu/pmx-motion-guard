@@ -1,0 +1,12 @@
+__pycache__/
+.venv/
+.env
+*.blend
+*.blend1
+*.abc
+mapping_test_input.json
+test_outputs/
+cache/
+*.dll
+*.exp
+*.lib
