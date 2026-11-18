@@ -79,7 +79,7 @@ class Settings(bpy.types.PropertyGroup):
     material_index: IntProperty(default=0)
     bone_index: IntProperty(default=0)
     mode: EnumProperty(name="修正方式", items=[("JOINTS", "骨骼", "骨骼姿态修正"),
-        ("BOTH", "骨骼 + 表面", "姿态修正和局部压缩"), ("SURFACE", "表面", "局部接触压缩")], default="BOTH")
+        ("BOTH", "骨骼 + 表面", "姿态修正和局部压缩"), ("SURFACE", "表面", "局部接触压缩")], default="JOINTS")
     start: IntProperty(name="开始", default=1)
     end: IntProperty(name="结束", default=250)
     left_arm: BoolProperty(name="左臂", default=True)
