@@ -1,4 +1,4 @@
-# PMX Retarget Guard 插件设计
+# PMX Motion Guard 插件设计
 
 ## 目标与运行环境
 

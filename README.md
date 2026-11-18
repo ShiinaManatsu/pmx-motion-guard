@@ -1,10 +1,12 @@
-# PMX Retarget Guard
+# PMX Motion Guard
+
+显示名称和发布包统一使用 PMX Motion Guard。扩展内部 ID 沿用 pmx_retarget_guard，已有安装、偏好设置、工程属性与缓存路径继续复用。
 
 Blender 5.3 / Windows x64 的 PMX 动画穿插修正插件。
 
 ## 使用
 
-通过 Blender 偏好设置中的从磁盘安装选择 release 目录中的 ZIP。3D 视图 N 面板打开 PMX Guard，选择 PMX 主网格，点击分析模型。检查骨骼映射和身体材质，再选择当前帧或动画范围处理。
+通过 Blender 偏好设置中的从磁盘安装选择 release 目录中的 ZIP。3D 视图 N 面板打开 Motion Guard，选择 PMX 主网格，点击分析模型。检查骨骼映射和身体材质，再选择当前帧或动画范围处理。
 
 偏好设置提供持久缓存路径、DeepSeek 地址、模型和密码显示的 API key。默认缓存位于 Blender DATAFILES/pmx_retarget_guard。映射同时保存在网格对象属性与磁盘指纹缓存。标准 PMX 使用本地识别，DeepSeek 可补充缺失映射。
 

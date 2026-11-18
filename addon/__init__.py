@@ -1,5 +1,5 @@
 """PMX collision correction and mesh/skeleton export tools."""
-bl_info = {"name": "PMX Retarget Guard", "author": "White", "version": (0, 1, 0),
+bl_info = {"name": "PMX Motion Guard", "author": "White", "version": (0, 1, 1),
            "blender": (4, 2, 0), "category": "Animation"}
 
 import concurrent.futures
@@ -332,11 +332,11 @@ class Export(bpy.types.Operator):
 
 
 class Panel(bpy.types.Panel):
-    bl_label = "PMX Retarget Guard"
+    bl_label = "PMX Motion Guard"
     bl_idname = "PMXRG_PT_main"
     bl_space_type = "VIEW_3D"
     bl_region_type = "UI"
-    bl_category = "PMX Guard"
+    bl_category = "Motion Guard"
 
     def draw(self, context):
         layout = self.layout
