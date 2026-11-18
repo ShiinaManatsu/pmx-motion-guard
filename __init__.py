@@ -1,5 +1,5 @@
 """PMX collision correction and mesh/skeleton export tools."""
-bl_info = {"name": "PMX Motion Guard", "author": "White", "version": (0, 1, 2),
+bl_info = {"name": "PMX Motion Guard", "author": "White", "version": (0, 2, 0),
            "blender": (4, 2, 0), "category": "Animation"}
 
 import concurrent.futures
@@ -53,9 +53,10 @@ class GuardPreferences(bpy.types.AddonPreferences):
     api_key: StringProperty(name="DeepSeek API key", subtype="PASSWORD")
     api_url: StringProperty(name="API 地址", default="https://api.deepseek.com")
     model: StringProperty(name="模型", default="deepseek-flash")
+    worker_python: StringProperty(name="离线 Python", subtype="FILE_PATH", description="留空使用 Blender 附带的 Python，需要 NumPy")
 
     def draw(self, context):
-        for name in ("cache_directory", "api_url", "model", "api_key"):
+        for name in ("cache_directory", "worker_python", "api_url", "model", "api_key"):
             self.layout.prop(self, name)
         self.layout.label(text="缓存默认保存在 Blender 用户数据目录")
 
@@ -207,7 +208,9 @@ class Process(bpy.types.Operator):
             start, end = (context.scene.frame_current,) * 2 if self.current else (settings.start, settings.end)
             if end < start:
                 raise ValueError("结束帧需要大于或等于开始帧")
-            self.job = AnimationJob(context, settings.source, profile, settings, cache_path(), start, end)
+            from .offline_job import OfflineBoneJob
+            job_class = OfflineBoneJob
+            self.job = job_class(context, settings.source, profile, settings, cache_path(), start, end)
         except Exception as error:
             self.report({"ERROR"}, str(error))
             return {"CANCELLED"}
@@ -244,10 +247,14 @@ class Process(bpy.types.Operator):
                 self.rate_samples.clear()
                 self.rate_samples.append((tick_started, 0))
             elapsed = now - self.stage_started
-            if self.job.stage == "连续求解":
-                settings.status = f"连续求解 · 已用 {format_duration(elapsed)}"
+            if self.job.stage in {"连续求解", "离线求解"}:
+                settings.status = f"{self.job.stage} · 已用 {format_duration(elapsed)}"
             else:
                 completed = count
+                unit = '帧'
+                if self.job.stage == '写入动画':
+                    completed, total = self.job.written, self.job.curve_count
+                    unit = '通道'
                 if self.job.stage == "采集骨骼":
                     completed = round(self.job.stage_progress / .2 * total)
                 self.rate_samples.append((now, completed))
@@ -260,11 +267,15 @@ class Process(bpy.types.Operator):
                 if completed - first_count >= 3 and duration >= 1 and rate > 0:
                     estimate = "剩余约 " + format_duration((total - completed) / rate)
                 settings.status = (f"{self.job.stage} · {completed}/{total} · "
-                                   f"已用 {format_duration(elapsed)} · {rate:.1f} 帧/s · {estimate}")
+                                   f"已用 {format_duration(elapsed)} · {rate:.1f} {unit}/s · {estimate}")
             context.window_manager.progress_update(count)
             if done:
                 report = self.job.finish()
-                self.close(context, f"完成 {total} 帧 · 总用时 {format_duration(report['seconds'])} · 最大位移 {report['maximum_displacement_mm']:.1f} mm")
+                total = self.job.end - self.job.start + 1
+                message = f"完成 {total} 帧 · 总用时 {format_duration(report['seconds'])}"
+                if not report.get('offline'):
+                    message += f" · 最大位移 {report['maximum_displacement_mm']:.1f} mm"
+                self.close(context, message)
                 return {"FINISHED"}
         except Exception as error:
             self.job.cancel()
