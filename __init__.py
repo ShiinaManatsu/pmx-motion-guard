@@ -9,6 +9,7 @@ from pathlib import Path
 import shutil
 import time
 import urllib.request
+import numpy as np
 
 import bpy
 from bpy.props import (BoolProperty, CollectionProperty, EnumProperty, FloatProperty,
@@ -363,7 +364,7 @@ class Panel(bpy.types.Panel):
         surfaces = column.box()
         row = surfaces.row(align=True)
         row.label(text="碰撞表面")
-        row.operator("pmx_rg.check_surfaces", text="检查", icon="CHECKMARK")
+        row.operator("pmx_rg.auto_surfaces", text="自动", icon="AUTO")
         surfaces.template_list("PMXRG_UL_materials", "", settings, "materials", settings, "material_index", rows=5)
         correction = column.box()
         correction.label(text="修正设置")
@@ -411,10 +412,10 @@ class PMXRG_UL_materials(bpy.types.UIList):
         layout.prop(item, "enabled", text=item.name)
 
 
-class CheckSurfaces(bpy.types.Operator):
-    bl_idname = "pmx_rg.check_surfaces"
-    bl_label = "检查碰撞表面"
-    bl_description = "检查身体区域覆盖，并提示可补选的材质"
+class AutoSurfaces(bpy.types.Operator):
+    bl_idname = "pmx_rg.auto_surfaces"
+    bl_label = "自动选择碰撞表面"
+    bl_description = "补选缺少身体区域的材质，并按当前修正方式重设骨骼过滤"
 
     def execute(self, context):
         from .engine import weights_and_groups, validate_surfaces
@@ -422,8 +423,42 @@ class CheckSurfaces(bpy.types.Operator):
         try:
             profile = profile_from_ui(settings)
             weights, _ = weights_and_groups(settings.source, profile["mapping"])
-            validate_surfaces(settings.source, weights, [i for i, item in enumerate(settings.materials) if item.enabled])
-            settings.status = "碰撞表面检查通过"
+            # Start each automatic pass from the current correction filter. The
+            # user can add or remove extra materials after this operation.
+            selected = {i for i, item in enumerate(settings.materials) if item.enabled}
+            obj = settings.source
+            obj.data.calc_loop_triangles()
+            from .vendor.retarget_guard.character import BODY_PART
+            part_weights = np.zeros((len(weights), 14))
+            for joint, part in enumerate(BODY_PART):
+                part_weights[:, part] += weights[:, joint]
+            labels = part_weights.argmax(1)
+            purity = part_weights.max(1)
+            names = ["躯干", "头部", "左上臂", "右上臂", "左前臂", "右前臂", "左手", "右手",
+                     "左大腿", "右大腿", "左小腿", "右小腿", "左脚", "右脚"]
+            material_ids = []
+            for index in range(len(obj.material_slots)):
+                ids = [vertex for triangle in obj.data.loop_triangles if triangle.material_index == index
+                       for vertex in triangle.vertices]
+                material_ids.append(np.unique(ids).astype(np.int64))
+            missing = []
+            for part, name in enumerate(names):
+                threshold = .6 if part < 2 else .9
+                usable = (labels == part) & (purity >= threshold)
+                if np.any(usable[np.unique(np.concatenate([material_ids[i] for i in selected]))]) if selected else False:
+                    continue
+                candidates = [i for i, ids in enumerate(material_ids) if np.any(usable[ids])]
+                if candidates:
+                    selected.update(candidates)
+                else:
+                    missing.append(name)
+            for index, item in enumerate(settings.materials):
+                item.enabled = index in selected
+            settings.left_arm = settings.right_arm = True
+            settings.left_leg = settings.right_leg = True
+            settings.spine = settings.mode != "JOINTS"
+            settings.neck = settings.mode != "JOINTS"
+            settings.status = "自动选择完成" if not missing else "缺少 " + "、".join(missing)
             self.report({"INFO"}, settings.status)
         except Exception as error:
             settings.status = str(error)
@@ -433,7 +468,7 @@ class CheckSurfaces(bpy.types.Operator):
 
 
 CLASSES = (GuardPreferences, MaterialItem, BoneItem, Settings, Analyze, AIMapping,
-           PMXRG_UL_bones, PMXRG_UL_materials, CheckSurfaces,
+           PMXRG_UL_bones, PMXRG_UL_materials, AutoSurfaces,
            Process, Cancel, Toggle, Export, Panel)
 
 
