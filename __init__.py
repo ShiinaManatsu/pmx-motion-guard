@@ -9,6 +9,7 @@ from pathlib import Path
 import shutil
 import time
 import urllib.request
+from collections import deque
 import numpy as np
 
 import bpy
@@ -211,6 +212,9 @@ class Process(bpy.types.Operator):
             self.report({"ERROR"}, str(error))
             return {"CANCELLED"}
         settings.running, settings.cancel = True, False
+        self.timing_stage = self.job.stage
+        self.stage_started = time.perf_counter()
+        self.rate_samples = deque([(self.stage_started, 0)])
         self.timer = context.window_manager.event_timer_add(.05, window=context.window)
         context.window_manager.modal_handler_add(self)
         context.window_manager.progress_begin(0, end - start + 1)
@@ -225,6 +229,7 @@ class Process(bpy.types.Operator):
         if event.type != "TIMER":
             return {"PASS_THROUGH"}
         try:
+            tick_started = time.perf_counter()
             done = self.job.step()
             deadline = time.perf_counter() + .04
             while self.job.capture_iterator is not None and time.perf_counter() < deadline:
@@ -232,13 +237,34 @@ class Process(bpy.types.Operator):
             count = self.job.frame - self.job.start
             total = self.job.end - self.job.start + 1
             settings.progress = self.job.stage_progress
-            elapsed = time.perf_counter() - self.job.started
-            remaining = elapsed / max(settings.progress, .001) * (1 - settings.progress)
-            settings.status = f"{self.job.stage} · {count}/{total} · 已用 {format_duration(elapsed)} · 剩余约 {format_duration(remaining)}"
+            now = time.perf_counter()
+            if self.timing_stage != self.job.stage:
+                self.timing_stage = self.job.stage
+                self.stage_started = tick_started
+                self.rate_samples.clear()
+                self.rate_samples.append((tick_started, 0))
+            elapsed = now - self.stage_started
+            if self.job.stage == "连续求解":
+                settings.status = f"连续求解 · 已用 {format_duration(elapsed)}"
+            else:
+                completed = count
+                if self.job.stage == "采集骨骼":
+                    completed = round(self.job.stage_progress / .2 * total)
+                self.rate_samples.append((now, completed))
+                while len(self.rate_samples) > 2 and now - self.rate_samples[1][0] > 20:
+                    self.rate_samples.popleft()
+                first_time, first_count = self.rate_samples[0]
+                duration = now - first_time
+                rate = (completed - first_count) / max(duration, .001)
+                estimate = "估算中"
+                if completed - first_count >= 3 and duration >= 1 and rate > 0:
+                    estimate = "剩余约 " + format_duration((total - completed) / rate)
+                settings.status = (f"{self.job.stage} · {completed}/{total} · "
+                                   f"已用 {format_duration(elapsed)} · {rate:.1f} 帧/s · {estimate}")
             context.window_manager.progress_update(count)
             if done:
                 report = self.job.finish()
-                self.close(context, f"完成 {total} 帧 · 最大位移 {report['maximum_displacement_mm']:.1f} mm")
+                self.close(context, f"完成 {total} 帧 · 总用时 {format_duration(report['seconds'])} · 最大位移 {report['maximum_displacement_mm']:.1f} mm")
                 return {"FINISHED"}
         except Exception as error:
             self.job.cancel()
