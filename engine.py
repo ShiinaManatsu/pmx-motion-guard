@@ -243,14 +243,71 @@ class AnimationJob:
         self.previous_quaternions = {}
         self.previous_correction = None
         self.finished = False
+        self.sequence_poses = None
+        if settings.mode == "JOINTS":
+            from .sequence_capture import capture_sequence
+            from .sequence_solver import solve_sequence
+            try:
+                character, poses, _, capture_report = capture_sequence(obj, self.mapping, self.slots, start, end)
+                enabled = np.zeros(22, bool)
+                enabled[enabled_indices(settings)] = True
+                solved, solve_report = solve_sequence(character, poses,
+                    fps=self.scene.render.fps / self.scene.render.fps_base,
+                    enabled=enabled[1:], screen=False, lookahead=5)
+            except Exception:
+                self.cancel()
+                raise
+            self.sequence_character = character
+            self.sequence_input = poses
+            self.sequence_poses = solved
+            self.sequence_report = dict(capture=capture_report, solve=solve_report)
+
+    def sequence_frame(self):
+        """Apply persistent solver deltas to the host's evaluated PMX surface."""
+        index = self.frame - self.start
+        pack = self.sequence_character.data
+        def forward(pose):
+            world = np.empty_like(pose)
+            joints = np.empty((22, 3))
+            for j, parent in enumerate(PARENTS):
+                local = pack['local_basis'][j] @ pose[j]
+                if parent < 0:
+                    world[j], joints[j] = local, pack['local_offset'][j]
+                else:
+                    world[j] = world[parent] @ local
+                    joints[j] = joints[parent] + world[parent] @ pack['local_offset'][j]
+            return world, joints
+        original_world, original_joints = forward(self.sequence_input[index])
+        corrected_world, corrected_joints = forward(self.sequence_poses[index])
+        rotations = corrected_world @ original_world.swapaxes(-1, -2)
+        # Anchor deltas to actual evaluated joint locations to retain auxiliary
+        # chain translations that differ from the reduced fixed-length rig.
+        current = matrices(self.obj, self.mapping)
+        actual = np.array([list(m.translation) for m in current]) @ C.T
+        corrected_actual = actual + corrected_joints - original_joints
+        translations = corrected_actual - np.einsum('jik,jk->ji', rotations, actual)
+        vertices, _, _ = sample_mesh(self.obj)
+        source = vertices @ C.T
+        output = np.zeros_like(source)
+        transforms = []
+        for j, (rotation, translation) in enumerate(zip(rotations, translations)):
+            output += (source @ rotation.T + translation) * self.weights[:, j, None]
+            matrix = np.eye(4)
+            matrix[:3, :3] = C.T @ rotation @ C
+            matrix[:3, 3] = C.T @ translation
+            transforms.append(Matrix(matrix.tolist()))
+        return output @ C, transforms, float(np.linalg.norm(output - source, axis=1).max())
 
     def step(self):
         self.scene.frame_set(self.frame)
         if len(self.obj.data.vertices) != self.source_vertex_count:
             raise ValueError("处理期间模型拓扑发生变化")
-        vertices, transforms, displacement, angles = corrected_frame(self.obj, self.mapping, self.slots,
-                                     self.weights, self.settings, self.directory, self.previous_correction)
-        self.previous_correction = angles.copy()
+        if self.sequence_poses is not None:
+            vertices, transforms, displacement = self.sequence_frame()
+        else:
+            vertices, transforms, displacement, angles = corrected_frame(self.obj, self.mapping, self.slots,
+                                         self.weights, self.settings, self.directory, self.previous_correction)
+            self.previous_correction = angles.copy()
         self.maximum_displacement = max(self.maximum_displacement, displacement)
         self.handle.write(vertices.astype("<f4").tobytes())
         self.preview.data.vertices.foreach_set("co", vertices.astype(np.float32).ravel())
@@ -305,6 +362,9 @@ class AnimationJob:
                       seconds=time.perf_counter() - self.started,
                       maximum_displacement_mm=self.maximum_displacement * 1000,
                       solver="pose-local evaluated geometry", source=self.obj.name)
+        if self.sequence_poses is not None:
+            report['solver'] = 'fixed character continuous stream, lookahead 5'
+            report['sequence'] = self.sequence_report
         (self.output_dir / "report.json").write_text(json.dumps(report, indent=2), encoding="utf-8")
         self.scene.frame_set(self.start)
         self.finished = True
