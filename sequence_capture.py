@@ -9,7 +9,32 @@ from .mapping import COORDINATES as C, PARENTS
 from .vendor.retarget_guard import build_character
 
 
-def capture_steps(obj, mapping, slots, start, end):
+def basis_vertices(obj, use_shape_keys):
+    """Sample the current shape-key mix in mesh space before modifiers."""
+    values = np.empty(len(obj.data.vertices) * 3, np.float32)
+    if not use_shape_keys or obj.data.shape_keys is None:
+        obj.data.vertices.foreach_get('co', values)
+        return values.reshape(-1, 3)
+    temporary = obj.copy()
+    temporary.name = 'Guard shape sampling'
+    temporary.modifiers.clear()
+    bpy.context.scene.collection.objects.link(temporary)
+    evaluated = None
+    try:
+        graph = bpy.context.evaluated_depsgraph_get()
+        evaluated = temporary.evaluated_get(graph)
+        mesh = evaluated.to_mesh()
+        if len(mesh.vertices) != len(obj.data.vertices):
+            raise ValueError('形态键基础形状的顶点数量发生变化')
+        mesh.vertices.foreach_get('co', values)
+        return values.reshape(-1, 3)
+    finally:
+        if evaluated is not None:
+            evaluated.to_mesh_clear()
+        bpy.data.objects.remove(temporary, do_unlink=True)
+
+
+def capture_steps(obj, mapping, slots, start, end, use_shape_keys=False):
     """Capture rotations once and measure the reduced rig's FK mismatch.
 
     This validation gate is necessary because PMX independent lower/upper
@@ -44,9 +69,7 @@ def capture_steps(obj, mapping, slots, start, end):
     ids = np.unique(faces)
     remap = np.full(len(weights), -1)
     remap[ids] = np.arange(len(ids))
-    values = np.empty(len(weights) * 3, np.float32)
-    obj.data.vertices.foreach_get('co', values)
-    vertices = values.reshape(-1, 3) @ C.T
+    vertices = basis_vertices(obj, use_shape_keys) @ C.T
     pack_started = time.perf_counter()
     character = build_character(vertices[ids], remap[faces], weights[ids], PARENTS,
                                 joints, np.arange(22), rest_basis=basis)

@@ -55,7 +55,8 @@ class OfflineBoneJob:
                 dtype=np.float32, shape=(end-start+1,len(vertices),3))
             np.savez(self.directory/'surface.npz', weights=weights,
                      faces=triangles[np.isin(materials,slots)])
-        self.capture_iterator = capture_steps(obj, profile['mapping'], slots, start, end)
+        self.capture_iterator = capture_steps(obj, profile['mapping'], slots, start, end,
+            use_shape_keys=settings.use_shape_key_basis and not self.surface)
         self.world, self.object_world, self.object_to_arm = [], [], []
         self.process = None
         self.rig = self.preview = None

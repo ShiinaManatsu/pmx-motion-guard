@@ -1,5 +1,5 @@
 """PMX collision correction and mesh/skeleton export tools."""
-bl_info = {"name": "PMX Motion Guard", "author": "White", "version": (0, 2, 1),
+bl_info = {"name": "PMX Motion Guard", "author": "White", "version": (0, 2, 2),
            "blender": (4, 2, 0), "category": "Animation"}
 
 import concurrent.futures
@@ -88,6 +88,8 @@ class Settings(bpy.types.PropertyGroup):
     right_leg: BoolProperty(name="右腿", default=True)
     spine: BoolProperty(name="脊柱", default=False)
     neck: BoolProperty(name="颈部", default=False)
+    use_shape_key_basis: BoolProperty(name="使用形态键后的基础形状", default=True,
+        description="使用开始处理时当前帧的形态键混合结果建立固定碰撞代理")
     compression: FloatProperty(name="压缩预算", default=.5, min=0, max=1)
     smoothing: FloatProperty(name="修正跟随速度", description="较低数值平滑骨骼修正，1 为逐帧即时修正", default=.35, min=.01, max=1)
     output: StringProperty(name="导出目录", subtype="DIR_PATH")
@@ -415,6 +417,8 @@ class Panel(bpy.types.Panel):
         correction = column.box()
         correction.label(text="修正设置")
         correction.prop(settings, "mode")
+        if settings.mode == 'JOINTS':
+            correction.prop(settings, 'use_shape_key_basis')
         grid = correction.grid_flow(columns=2)
         for name in ("left_arm", "right_arm", "left_leg", "right_leg", "spine", "neck"):
             grid.prop(settings, name)
