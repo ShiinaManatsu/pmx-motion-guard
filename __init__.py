@@ -198,7 +198,7 @@ class AIMapping(bpy.types.Operator):
 class Process(bpy.types.Operator):
     bl_idname = "pmx_rg.process"
     bl_label = "处理动画范围"
-    current: BoolProperty(default=False, options={"HIDDEN"})
+    current: BoolProperty(default=False, options={"HIDDEN", "SKIP_SAVE"})
 
     def execute(self, context):
         from .engine import AnimationJob
@@ -274,7 +274,8 @@ class Process(bpy.types.Operator):
             if done:
                 report = self.job.finish()
                 total = self.job.end - self.job.start + 1
-                message = f"完成 {total} 帧 · 总用时 {format_duration(report['seconds'])}"
+                label = '单帧预览完成' if self.current else f'完成 {total} 帧（{self.job.start}–{self.job.end}）'
+                message = f"{label} · 总用时 {format_duration(report['seconds'])}"
                 if not report.get('offline'):
                     message += f" · 最大位移 {report['maximum_displacement_mm']:.1f} mm"
                 self.close(context, message)
@@ -433,7 +434,7 @@ class Panel(bpy.types.Panel):
         row = animation.row(align=True)
         row.prop(settings, "start")
         row.prop(settings, "end")
-        animation.operator("pmx_rg.process")
+        animation.operator("pmx_rg.process").current = False
         layout.label(text=settings.status)
         if settings.running:
             layout.progress(factor=settings.progress, type="BAR", text="动画处理")
