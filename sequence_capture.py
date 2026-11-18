@@ -9,7 +9,7 @@ from .mapping import COORDINATES as C, PARENTS
 from .vendor.retarget_guard import build_character
 
 
-def capture_sequence(obj, mapping, slots, start, end):
+def capture_steps(obj, mapping, slots, start, end):
     """Capture rotations once and measure the reduced rig's FK mismatch.
 
     This validation gate is necessary because PMX independent lower/upper
@@ -64,6 +64,7 @@ def capture_sequence(obj, mapping, slots, start, end):
                 pose[joint] = character.data['local_basis'][joint].T @ local
             poses.append(pose)
             positions.append(np.array([list(m.translation) for m in current]) @ C.T)
+            yield frame
     finally:
         scene.frame_set(original_frame)
         arm.data.pose_position = original_pose
@@ -90,3 +91,12 @@ def capture_sequence(obj, mapping, slots, start, end):
                   frames=len(poses), fk_max_error_mm=maximum * 1000,
                   fk_rms_error_mm=(squared / (len(poses) * 22)) ** .5 * 1000)
     return character, poses, positions, report
+
+
+def capture_sequence(obj, mapping, slots, start, end):
+    iterator = capture_steps(obj, mapping, slots, start, end)
+    while True:
+        try:
+            next(iterator)
+        except StopIteration as finished:
+            return finished.value

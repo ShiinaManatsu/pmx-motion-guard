@@ -6,6 +6,8 @@ import struct
 import time
 import uuid
 import ctypes
+import concurrent.futures
+import threading
 
 import bpy
 from mathutils import Matrix
@@ -241,26 +243,19 @@ class AnimationJob:
         self.handle.write(struct.pack("<12siiffi", b"POINTCACHE2\0", 1, len(mesh.vertices), float(start), 1., end - start + 1))
         self.maximum_displacement = 0.
         self.previous_quaternions = {}
+        self.keyframes = {}
         self.previous_correction = None
         self.finished = False
         self.sequence_poses = None
+        self.stage = "输出"
+        self.stage_progress = 0.
+        self.executor = None
+        self.capture_iterator = None
+        self.cancel_event = threading.Event()
         if settings.mode == "JOINTS":
-            from .sequence_capture import capture_sequence
-            from .sequence_solver import solve_sequence
-            try:
-                character, poses, _, capture_report = capture_sequence(obj, self.mapping, self.slots, start, end)
-                enabled = np.zeros(22, bool)
-                enabled[enabled_indices(settings)] = True
-                solved, solve_report = solve_sequence(character, poses,
-                    fps=self.scene.render.fps / self.scene.render.fps_base,
-                    enabled=enabled[1:], screen=False, lookahead=5)
-            except Exception:
-                self.cancel()
-                raise
-            self.sequence_character = character
-            self.sequence_input = poses
-            self.sequence_poses = solved
-            self.sequence_report = dict(capture=capture_report, solve=solve_report)
+            from .sequence_capture import capture_steps
+            self.capture_iterator = capture_steps(obj, self.mapping, self.slots, start, end)
+            self.stage = "采集骨骼"
 
     def sequence_frame(self):
         """Apply persistent solver deltas to the host's evaluated PMX surface."""
@@ -299,6 +294,33 @@ class AnimationJob:
         return output @ C, transforms, float(np.linalg.norm(output - source, axis=1).max())
 
     def step(self):
+        if self.capture_iterator is not None:
+            try:
+                captured = next(self.capture_iterator)
+                self.stage_progress = (captured - self.start + 1) / (self.end - self.start + 1) * .2
+            except StopIteration as finished:
+                from .sequence_solver import solve_sequence
+                character, poses, _, capture_report = finished.value
+                self.capture_iterator = None
+                self.sequence_character, self.sequence_input = character, poses
+                self.sequence_report = dict(capture=capture_report)
+                enabled = np.zeros(22, bool)
+                enabled[enabled_indices(self.settings)] = True
+                self.executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+                self.solve_future = self.executor.submit(solve_sequence, character, poses,
+                    fps=self.scene.render.fps / self.scene.render.fps_base,
+                    enabled=enabled[1:], screen=False, lookahead=5, cancel=self.cancel_event)
+                self.stage = "连续求解"
+            return False
+        if self.executor is not None:
+            if not self.solve_future.done():
+                return False
+            self.sequence_poses, report = self.solve_future.result()
+            self.sequence_report['solve'] = report
+            self.executor.shutdown(wait=False)
+            self.executor = None
+            self.stage = "输出"
+            self.stage_progress = .3
         self.scene.frame_set(self.frame)
         if len(self.obj.data.vertices) != self.source_vertex_count:
             raise ValueError("处理期间模型拓扑发生变化")
@@ -332,11 +354,27 @@ class AnimationJob:
                 quaternion.make_compatible(previous)
             self.previous_quaternions[target.name] = quaternion.copy()
             for prop in ("location", "rotation_quaternion", "scale"):
-                target.keyframe_insert(prop, frame=self.frame, group=target.name)
+                path = target.path_from_id(prop)
+                for component, value in enumerate(getattr(target, prop)):
+                    self.keyframes.setdefault((path, component), []).append((self.frame, value))
         self.frame += 1
+        fraction = (self.frame - self.start) / (self.end - self.start + 1)
+        self.stage_progress = .3 + .7 * fraction if self.sequence_poses is not None else fraction
         return self.frame > self.end
 
     def finish(self):
+        slot = self.rig.animation_data.action_slot
+        layer = self.action.layers[0]
+        action_strip = layer.strips[0]
+        channels = action_strip.channelbag(slot, ensure=True)
+        for (path, component), samples in self.keyframes.items():
+            curve = channels.fcurves.new(data_path=path, index=component)
+            curve.keyframe_points.add(len(samples))
+            curve.keyframe_points.foreach_set('co', np.asarray(samples, dtype=np.float32).ravel())
+            for point in curve.keyframe_points:
+                point.interpolation = 'LINEAR'
+            curve.update()
+        self.rig.animation_data.action_slot = slot
         self.handle.close()
         (self.output_dir / "motion.pc2.partial").replace(self.output_dir / "motion.pc2")
         modifier = self.preview.modifiers.new("Guard animation cache", "MESH_CACHE")
@@ -347,6 +385,7 @@ class AnimationJob:
         track = self.rig.animation_data.nla_tracks.new()
         track.name = "Guard correction result"
         strip = track.strips.new("Guard result", self.start, self.action)
+        strip.action_slot = slot
         strip.blend_type = "REPLACE"
         strip.extrapolation = "NOTHING"
         self.rig.animation_data.action = None
@@ -371,6 +410,13 @@ class AnimationJob:
         return report
 
     def cancel(self):
+        self.cancel_event.set()
+        if self.capture_iterator is not None:
+            self.capture_iterator.close()
+            self.capture_iterator = None
+        if self.executor is not None:
+            self.executor.shutdown(wait=False, cancel_futures=True)
+            self.executor = None
         if not self.handle.closed:
             self.handle.close()
         for obj in (self.preview, self.rig):

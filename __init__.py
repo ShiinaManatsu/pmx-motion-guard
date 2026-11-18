@@ -1,5 +1,5 @@
 """PMX collision correction and mesh/skeleton export tools."""
-bl_info = {"name": "PMX Motion Guard", "author": "White", "version": (0, 1, 1),
+bl_info = {"name": "PMX Motion Guard", "author": "White", "version": (0, 1, 2),
            "blender": (4, 2, 0), "category": "Animation"}
 
 import concurrent.futures
@@ -226,12 +226,15 @@ class Process(bpy.types.Operator):
             return {"PASS_THROUGH"}
         try:
             done = self.job.step()
+            deadline = time.perf_counter() + .04
+            while self.job.capture_iterator is not None and time.perf_counter() < deadline:
+                done = self.job.step()
             count = self.job.frame - self.job.start
             total = self.job.end - self.job.start + 1
-            settings.progress = count / total
+            settings.progress = self.job.stage_progress
             elapsed = time.perf_counter() - self.job.started
-            remaining = elapsed / count * (total - count)
-            settings.status = f"处理 {count}/{total} · 已用 {format_duration(elapsed)} · 剩余约 {format_duration(remaining)}"
+            remaining = elapsed / max(settings.progress, .001) * (1 - settings.progress)
+            settings.status = f"{self.job.stage} · {count}/{total} · 已用 {format_duration(elapsed)} · 剩余约 {format_duration(remaining)}"
             context.window_manager.progress_update(count)
             if done:
                 report = self.job.finish()
