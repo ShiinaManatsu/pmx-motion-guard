@@ -73,6 +73,8 @@ class Settings(bpy.types.PropertyGroup):
     result: PointerProperty(type=bpy.types.Object)
     materials: CollectionProperty(type=MaterialItem)
     bones: CollectionProperty(type=BoneItem)
+    material_index: IntProperty(default=0)
+    bone_index: IntProperty(default=0)
     mode: EnumProperty(name="修正方式", items=[("JOINTS", "骨骼", "骨骼姿态修正"),
         ("BOTH", "骨骼 + 表面", "姿态修正和局部压缩"), ("SURFACE", "表面", "局部接触压缩")], default="BOTH")
     start: IntProperty(name="开始", default=1)
@@ -350,41 +352,88 @@ class Panel(bpy.types.Panel):
         settings = context.scene.pmx_rg
         column = layout.column()
         column.enabled = not settings.running
-        column.prop(settings, "source", text="PMX 网格")
-        column.operator("pmx_rg.analyze")
-        column.prop(settings, "show_mapping", toggle=True)
-        if settings.show_mapping and settings.source and settings.source.find_armature():
-            for item in settings.bones:
-                column.prop_search(item, "bone", settings.source.find_armature().data, "bones", text=item.role)
-            column.operator("pmx_rg.ai_mapping")
-        column.prop(settings, "show_materials", toggle=True)
-        if settings.show_materials:
-            for item in settings.materials:
-                column.prop(item, "enabled", text=item.name)
-        column.prop(settings, "mode")
-        grid = column.grid_flow(columns=2)
+        model = column.box()
+        model.label(text="模型配置")
+        model.prop(settings, "source", text="PMX 网格")
+        model.operator("pmx_rg.analyze")
+        bones = column.box()
+        bones.label(text="骨骼映射")
+        bones.template_list("PMXRG_UL_bones", "", settings, "bones", settings, "bone_index", rows=5)
+        bones.operator("pmx_rg.ai_mapping")
+        surfaces = column.box()
+        row = surfaces.row(align=True)
+        row.label(text="碰撞表面")
+        row.operator("pmx_rg.check_surfaces", text="检查", icon="CHECKMARK")
+        surfaces.template_list("PMXRG_UL_materials", "", settings, "materials", settings, "material_index", rows=5)
+        correction = column.box()
+        correction.label(text="修正设置")
+        correction.prop(settings, "mode")
+        grid = correction.grid_flow(columns=2)
         for name in ("left_arm", "right_arm", "left_leg", "right_leg", "spine", "neck"):
             grid.prop(settings, name)
         if settings.mode != "JOINTS":
-            column.prop(settings, "compression")
-        column.prop(settings, "smoothing")
-        row = column.row(align=True)
+            correction.prop(settings, "compression")
+        correction.prop(settings, "smoothing")
+        row = correction.row(align=True)
+        row.operator("pmx_rg.process", text="预览当前帧").current = True
+        row.operator("pmx_rg.toggle", text="原始 / 修正")
+        animation = column.box()
+        animation.label(text="动画处理")
+        row = animation.row(align=True)
         row.prop(settings, "start")
         row.prop(settings, "end")
-        column.operator("pmx_rg.process", text="预览当前帧").current = True
-        column.operator("pmx_rg.process")
-        column.operator("pmx_rg.toggle")
+        animation.operator("pmx_rg.process")
         layout.label(text=settings.status)
         if settings.running:
             layout.progress(factor=settings.progress, type="BAR", text="动画处理")
             layout.operator("pmx_rg.cancel")
-        column.prop(settings, "output")
-        row = column.row(align=True)
+        export = column.box()
+        export.label(text="导出")
+        export.prop(settings, "output")
+        row = export.row(align=True)
         row.operator("pmx_rg.export", text="导出 Alembic").kind = "ABC"
         row.operator("pmx_rg.export", text="导出 FBX 骨架").kind = "FBX"
 
 
+class PMXRG_UL_bones(bpy.types.UIList):
+    def draw_item(self, context, layout, data, item, icon, active_data, active_propname, index):
+        obj = context.scene.pmx_rg.source
+        row = layout.row(align=True)
+        row.label(text=item.role)
+        if obj and obj.find_armature():
+            row.prop_search(item, "bone", obj.find_armature().data, "bones", text="")
+        else:
+            row.label(text=item.bone)
+
+
+class PMXRG_UL_materials(bpy.types.UIList):
+    def draw_item(self, context, layout, data, item, icon, active_data, active_propname, index):
+        layout.prop(item, "enabled", text=item.name)
+
+
+class CheckSurfaces(bpy.types.Operator):
+    bl_idname = "pmx_rg.check_surfaces"
+    bl_label = "检查碰撞表面"
+    bl_description = "检查身体区域覆盖，并提示可补选的材质"
+
+    def execute(self, context):
+        from .engine import weights_and_groups, validate_surfaces
+        settings = context.scene.pmx_rg
+        try:
+            profile = profile_from_ui(settings)
+            weights, _ = weights_and_groups(settings.source, profile["mapping"])
+            validate_surfaces(settings.source, weights, [i for i, item in enumerate(settings.materials) if item.enabled])
+            settings.status = "碰撞表面检查通过"
+            self.report({"INFO"}, settings.status)
+        except Exception as error:
+            settings.status = str(error)
+            self.report({"ERROR"}, str(error))
+            return {"CANCELLED"}
+        return {"FINISHED"}
+
+
 CLASSES = (GuardPreferences, MaterialItem, BoneItem, Settings, Analyze, AIMapping,
+           PMXRG_UL_bones, PMXRG_UL_materials, CheckSurfaces,
            Process, Cancel, Toggle, Export, Panel)
 
 
