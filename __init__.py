@@ -1,5 +1,5 @@
 """PMX collision correction and mesh/skeleton export tools."""
-bl_info = {"name": "PMX Motion Guard", "author": "White", "version": (0, 2, 0),
+bl_info = {"name": "PMX Motion Guard", "author": "White", "version": (0, 2, 1),
            "blender": (4, 2, 0), "category": "Animation"}
 
 import concurrent.futures
@@ -306,6 +306,12 @@ class Toggle(bpy.types.Operator):
     bl_label = "切换原始 / 修正"
     def execute(self, context):
         settings = context.scene.pmx_rg
+        if settings.result and settings.result.get('pmx_guard_track'):
+            arm = settings.result.find_armature()
+            track = arm.animation_data.nla_tracks.get(settings.result['pmx_guard_track']) if arm and arm.animation_data else None
+            if track:
+                track.mute = not track.mute
+            return {'FINISHED'}
         if settings.result and settings.source:
             show = settings.result.hide_get()
             settings.result.hide_set(not show)

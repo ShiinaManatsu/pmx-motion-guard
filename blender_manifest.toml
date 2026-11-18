@@ -1,6 +1,6 @@
 schema_version = "1.0.0"
 id = "pmx_retarget_guard"
-version = "0.2.0"
+version = "0.2.1"
 name = "PMX Motion Guard"
 tagline = "Correct PMX self intersections and export mesh and skeletal animation"
 maintainer = "White"

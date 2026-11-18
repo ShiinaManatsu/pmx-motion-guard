@@ -10,7 +10,7 @@ Blender 5.3 / Windows x64 的 PMX 动画穿插修正插件。
 
 偏好设置提供持久缓存路径、DeepSeek 地址、模型和密码显示的 API key。默认缓存位于 Blender DATAFILES/pmx_retarget_guard。映射同时保存在网格对象属性与磁盘指纹缓存。标准 PMX 使用本地识别，DeepSeek 可补充缺失映射。
 
-骨骼模式输出独立骨架和使用原模型权重的预览网格。表面模式输出可播放 PC2 网格缓存与独立烘焙骨架。烘焙骨架保留原始全部骨名和骨骼，用于挂接饰品，动作放在自身 NLA Replace 片段中。导出 Alembic 保存最终网格形变，FBX 保存配套骨架动画。时间轴帧数沿用 Blender 工程。
+骨骼模式在原骨架上输出 Motion Guard · correction NLA Replace 层。已有活动 Action 自动推入 Original motion 层，原有 NLA 轨道保留。Motion Guard · baseline 层记录源动画未覆盖的静态属性，保证静音修正层后恢复原姿态。修正片段内同时覆盖骨骼约束影响值，避免已烘焙约束重复求值。面板切换按钮控制修正层静音。表面模式输出可播放 PC2 网格缓存与独立烘焙骨架。导出 Alembic 保存最终网格形变，FBX 保存配套骨架动画。时间轴帧数沿用 Blender 工程。
 
 结果对象的切换按钮控制原始与修正对象的视口显示。渲染或导出前选择所需对象及可见性。缓存路径随工程保存，移动工程时需携带缓存目录或已导出的 Alembic。
 

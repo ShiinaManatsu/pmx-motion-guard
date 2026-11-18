@@ -28,6 +28,13 @@ class OfflineBoneJob:
         self.directory = Path(directory)/'animations'/uuid.uuid4().hex
         self.directory.mkdir(parents=True)
         self.names = [b.name for b in self.arm.data.bones]
+        self.baseline = []
+        for bone in self.arm.pose.bones:
+            for prop in ('location','rotation_quaternion','scale'):
+                for component,value in enumerate(getattr(bone,prop)):
+                    self.baseline.append((bone.path_from_id(prop),component,float(value)))
+            for constraint in bone.constraints:
+                self.baseline.append((constraint.path_from_id('influence'),0,constraint.influence))
         self.parents = [self.names.index(b.parent.name) if b.parent else -1 for b in self.arm.data.bones]
         unsupported = [b.name for b in self.arm.data.bones if b.inherit_scale != 'FULL' or not b.use_inherit_rotation or not b.use_local_location]
         if unsupported:
@@ -150,6 +157,15 @@ class OfflineBoneJob:
         return False
 
     def prepare_output(self):
+        if not self.surface:
+            self.rig = self.arm
+            self.action = bpy.data.actions.new(self.arm.name+' · Guard correction')
+            self.actions.append(self.action)
+            self.slot = self.action.slots.new(id_type='OBJECT',name=self.arm.name)
+            self.channels = self.action.layers.new('Guard motion').strips.new(type='KEYFRAME').channelbag(self.slot,ensure=True)
+            self.object_channels = []
+            self.prepare_curves()
+            return
         self.rig = self.arm.copy()
         self.rig.data = self.arm.data.copy()
         self.rig.name = self.arm.name+' · Guard offline'
@@ -210,9 +226,14 @@ class OfflineBoneJob:
         for obj, world in ((self.rig,arm_world),(self.preview,np.array(self.object_world))):
             obj.rotation_mode = 'QUATERNION'
             self.object_channels.append((obj,quaternion_channels(world[:,None])))
+        self.prepare_curves()
+
+    def prepare_curves(self):
         def curves():
             for j,name in enumerate(self.names):
                 bone = self.rig.pose.bones[name]
+                if bone.rotation_mode != 'QUATERNION':
+                    raise ValueError('骨骼 NLA 输出需要四元数旋转模式，请检查 '+name)
                 for prop,key in [('location','location'),('rotation_quaternion','quaternion'),('scale','scale')]:
                     values = self.result[key][:,j]
                     for component in range(values.shape[1]):
@@ -221,6 +242,8 @@ class OfflineBoneJob:
         self.curve_count, self.written = len(self.names)*10,0
 
     def finish(self):
+        if not self.surface:
+            return self.finish_on_source()
         for obj,arrays in self.object_channels:
             action = self.action if obj==self.rig else bpy.data.actions.new(obj.name+' transform')
             if obj != self.rig:
@@ -260,6 +283,66 @@ class OfflineBoneJob:
         (self.directory/'job_report.json').write_text(json.dumps(report,indent=2),encoding='utf-8')
         return report
 
+    def finish_on_source(self):
+        animation = self.arm.animation_data_create()
+        source_actions = [strip.action for track in animation.nla_tracks for strip in track.strips if strip.action]
+        if animation.action:
+            source_actions.append(animation.action)
+        animated = set()
+        for action in source_actions:
+            for layer in action.layers:
+                for strip in layer.strips:
+                    if strip.type == 'KEYFRAME':
+                        for bag in strip.channelbags:
+                            animated.update((curve.data_path,curve.array_index) for curve in bag.fcurves)
+        animated.update((curve.data_path,curve.array_index) for curve in animation.drivers)
+        base_action = bpy.data.actions.new(self.arm.name+' · Guard baseline')
+        base_slot = base_action.slots.new(id_type='OBJECT',name=self.arm.name)
+        base_channels = base_action.layers.new('Baseline').strips.new(type='KEYFRAME').channelbag(base_slot,ensure=True)
+        for path,component,value in self.baseline:
+            if (path,component) in animated:
+                continue
+            curve = base_channels.fcurves.new(data_path=path,index=component)
+            curve.keyframe_points.insert(self.start,value)
+        base_track = animation.nla_tracks.new()
+        base_track.name = 'Motion Guard · baseline'
+        base_strip = base_track.strips.new('Original defaults',self.start,base_action)
+        base_strip.action_slot = base_slot
+        base_strip.extrapolation = 'HOLD'
+        # Bake evaluated constraints into the clip and disable their second pass
+        # only while the correction strip contributes to the animation.
+        for bone in self.arm.pose.bones:
+            for constraint in bone.constraints:
+                curve = self.channels.fcurves.new(data_path=constraint.path_from_id('influence'))
+                curve.keyframe_points.insert(self.start,0.)
+        if animation.action:
+            original, slot = animation.action, animation.action_slot
+            baseline = animation.nla_tracks.new()
+            baseline.name = 'Original motion'
+            begin, end = original.frame_range
+            strip = baseline.strips.new(original.name,int(begin),original)
+            strip.action_slot = slot
+            strip.blend_type = animation.action_blend_type
+            strip.influence = animation.action_influence
+            strip.extrapolation = animation.action_extrapolation
+            animation.action = None
+        track = animation.nla_tracks.new()
+        track.name = 'Motion Guard · correction'
+        strip = track.strips.new('Guard correction',self.start,self.action)
+        strip.action_slot = self.slot
+        strip.blend_type = 'REPLACE'
+        strip.extrapolation = 'NOTHING'
+        if self.end > self.start:
+            strip.frame_end = self.end
+            strip.action_frame_end = self.end
+        self.obj['pmx_guard_track'] = track.name
+        self.obj['skeleton'] = self.arm.name
+        self.obj['frame_start'],self.obj['frame_end'] = self.start,self.end
+        self.obj['mode'] = 'JOINTS'
+        self.settings.result = self.obj
+        self.scene.frame_set(self.start)
+        return dict(seconds=time.perf_counter()-self.started,offline=True)
+
     def cancel(self):
         self.vertices = None
         if self.capture_iterator is not None:
@@ -270,7 +353,7 @@ class OfflineBoneJob:
         if self.log and not self.log.closed:
             self.log.close()
         for obj in (self.preview,self.rig):
-            if obj is not None:
+            if obj is not None and obj != self.arm:
                 data = obj.data
                 bpy.data.objects.remove(obj,do_unlink=True)
                 if data.users == 0:
