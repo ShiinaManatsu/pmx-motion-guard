@@ -20,6 +20,12 @@ POOL = concurrent.futures.ThreadPoolExecutor(max_workers=1)
 PACKAGE = __package__
 
 
+def format_duration(seconds):
+    hours, remainder = divmod(max(0, round(seconds)), 3600)
+    minutes, seconds = divmod(remainder, 60)
+    return f"{hours:02d}:{minutes:02d}:{seconds:02d}"
+
+
 def preferences():
     entry = bpy.context.preferences.addons.get(PACKAGE)
     return entry.preferences if entry else None
@@ -221,7 +227,8 @@ class Process(bpy.types.Operator):
             total = self.job.end - self.job.start + 1
             settings.progress = count / total
             elapsed = time.perf_counter() - self.job.started
-            settings.status = f"处理 {count}/{total} · {elapsed:.0f}s · 剩余约 {elapsed / count * (total-count):.0f}s"
+            remaining = elapsed / count * (total - count)
+            settings.status = f"处理 {count}/{total} · 已用 {format_duration(elapsed)} · 剩余约 {format_duration(remaining)}"
             context.window_manager.progress_update(count)
             if done:
                 report = self.job.finish()
